@@ -8,7 +8,7 @@
 #include <math.h>    /* HUGE_VAL */
 #include <stdlib.h>  /* NULL, malloc(), realloc(), free(), strtod() */
 #include <string.h>  /* memcpy() */
-
+#include <stdio.h>
 #ifndef LEPT_PARSE_STACK_INIT_SIZE
 #define LEPT_PARSE_STACK_INIT_SIZE 256
 #endif
@@ -63,6 +63,7 @@ static int lept_parse_literal(lept_context* c, lept_value* v, const char* litera
 }
 
 static int lept_parse_number(lept_context* c, lept_value* v) {
+    // printf("I'm in number %c\n", *c->json);
     const char* p = c->json;
     if (*p == '-') p++;
     if (*p == '0') p++;
@@ -83,10 +84,13 @@ static int lept_parse_number(lept_context* c, lept_value* v) {
     }
     errno = 0;
     v->u.n = strtod(c->json, NULL);
+    // printf("v->u.n:%f\n", v->u.n);
     if (errno == ERANGE && (v->u.n == HUGE_VAL || v->u.n == -HUGE_VAL))
         return LEPT_PARSE_NUMBER_TOO_BIG;
     v->type = LEPT_NUMBER;
     c->json = p;
+    // if (p)printf("p in %d\n", *p);
+    // else printf("p isn't exits\n");
     return LEPT_PARSE_OK;
 }
 
@@ -139,6 +143,7 @@ static int lept_parse_string(lept_context* c, lept_value* v) {
             case '\"':
                 len = c->top - head;
                 lept_set_string(v, (const char*)lept_context_pop(c, len), len);
+                //printf("len:%lu\n", len);
                 c->json = p;
                 return LEPT_PARSE_OK;
             case '\\':
@@ -187,6 +192,7 @@ static int lept_parse_array(lept_context* c, lept_value* v) {
     size_t size = 0;
     int ret;
     EXPECT(c, '[');
+    lept_parse_whitespace(c);
     if (*c->json == ']') {
         c->json++;
         v->type = LEPT_ARRAY;
@@ -195,12 +201,27 @@ static int lept_parse_array(lept_context* c, lept_value* v) {
         return LEPT_PARSE_OK;
     }
     for (;;) {
+        lept_parse_whitespace(c);
+        // printf("json:%c\n", *c->json);
         lept_value e;
         lept_init(&e);
-        if ((ret = lept_parse_value(c, &e)) != LEPT_PARSE_OK)
+        // printf("!\n");
+        if ((ret = lept_parse_value(c, &e)) != LEPT_PARSE_OK){
+            // printf("size:%lu\n", size);
+            for (size_t i = 0; i < size; i++) {
+                lept_free(lept_context_pop(c, sizeof(lept_value)));    
+            }
+            //c->top = 0;
             return ret;
+        }
+            
+        // if (e.type == LEPT_STRING) {
+        //     printf("YES\n");
+        // }
+        // printf("@\n");
         memcpy(lept_context_push(c, sizeof(lept_value)), &e, sizeof(lept_value));
         size++;
+        lept_parse_whitespace(c);
         if (*c->json == ',')
             c->json++;
         else if (*c->json == ']') {
@@ -208,11 +229,16 @@ static int lept_parse_array(lept_context* c, lept_value* v) {
             v->type = LEPT_ARRAY;
             v->u.a.size = size;
             size *= sizeof(lept_value);
-            memcpy(v->u.a.e = (lept_value*)malloc(size), lept_context_pop(c, size), size);
+            memcpy((v->u.a.e = (lept_value*)malloc(size)), lept_context_pop(c, size), size);
             return LEPT_PARSE_OK;
         }
-        else
+        else{
+            for (size_t i = 0; i < size; i++) {
+                lept_free(lept_context_pop(c, sizeof(lept_value)));    
+            }
+            //c->top = 0;
             return LEPT_PARSE_MISS_COMMA_OR_SQUARE_BRACKET;
+        }
     }
 }
 
@@ -253,6 +279,14 @@ void lept_free(lept_value* v) {
     assert(v != NULL);
     if (v->type == LEPT_STRING)
         free(v->u.s.s);
+    else if (v->type == LEPT_ARRAY)
+    {
+        for (size_t i = 0; i < lept_get_array_size(v); i++) {
+            lept_free(lept_get_array_element(v,i));
+        }
+        free(v->u.a.e);
+    }
+
     v->type = LEPT_NULL;
 }
 
@@ -288,7 +322,8 @@ const char* lept_get_string(const lept_value* v) {
 }
 
 size_t lept_get_string_length(const lept_value* v) {
-    assert(v != NULL && v->type == LEPT_STRING);
+    assert(v != NULL);
+    assert(v->type == LEPT_STRING);
     return v->u.s.len;
 }
 

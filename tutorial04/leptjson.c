@@ -9,6 +9,8 @@
 #include <stdlib.h>  /* NULL, malloc(), realloc(), free(), strtod() */
 #include <string.h>  /* memcpy() */
 
+#include <stdio.h> /* printf */
+
 #ifndef LEPT_PARSE_STACK_INIT_SIZE
 #define LEPT_PARSE_STACK_INIT_SIZE 256
 #endif
@@ -92,14 +94,52 @@ static int lept_parse_number(lept_context* c, lept_value* v) {
 
 static const char* lept_parse_hex4(const char* p, unsigned* u) {
     /* \TODO */
+    *u = 0;
+    unsigned int temp = 0;
+    for (int i = 0; i < 4; i++) {
+        if (ISDIGIT(p[i])) {
+            temp = p[i] - '0';
+        }else if (p[i] <= 'F' && p[i] >= 'A'){
+            temp = p[i] - 'A'+10;
+        }else if (p[i] <= 'f' && p[i] >= 'a'){
+            temp = p[i] - 'a'+10;//化为16进制
+        }
+        else{
+            return NULL;
+        }
+        for (int j = i; j < 3; j++) {
+            temp*=16;
+        }
+        *u+=temp;
+    }
+    p+=4;
     return p;
 }
 
 static void lept_encode_utf8(lept_context* c, unsigned u) {
     /* \TODO */
+    assert(u <= 0x10ffff);
+    if (u <= 0x7f) {
+        PUTC(c, (u&0xff));
+    } else if (u <= 0x7ff && u >= 0x80) {
+        PUTC(c, (0xc0 | ((u>>6) & 0xff)));//0x1f 表示00011111
+        PUTC(c, (0x80 | (u & 0x3f)));//0x3f 表示00111111
+    } else if (u <= 0xffff && u >= 0x800) {
+        PUTC(c, (0xE0 | ((u>>12) & 0xff)));
+        PUTC(c, (0x80 | ((u>> 6) & 0x3f)));//0x1f 表示00011111
+        PUTC(c, (0x80 | (u & 0x3f)));//0x3f 表示00111111
+    } else if (u <= 0x10ffff && u >= 0x10000) {
+        PUTC(c, (0xF0 | ((u>>18) & 0xff)));
+        PUTC(c, (0x80 | ((u>> 12) & 0x3f)));
+        PUTC(c, (0x80 | ((u>> 6) & 0x3f)));//0x1f 表示00011111
+        PUTC(c, (0x80 | (u & 0x3f)));//0x3f 表示00111111
+    }
+    
+    
 }
 
-#define STRING_ERROR(ret) do { c->top = head; return ret; } while(0)
+#define STRING_ERROR(ret) do { c->top = head; return ret; } while(0)//将栈头回退，返回错误代码
+
 
 static int lept_parse_string(lept_context* c, lept_value* v) {
     size_t head = c->top, len;
@@ -126,9 +166,15 @@ static int lept_parse_string(lept_context* c, lept_value* v) {
                     case 'r':  PUTC(c, '\r'); break;
                     case 't':  PUTC(c, '\t'); break;
                     case 'u':
-                        if (!(p = lept_parse_hex4(p, &u)))
-                            STRING_ERROR(LEPT_PARSE_INVALID_UNICODE_HEX);
-                        /* \TODO surrogate handling */
+                        if (!(p = lept_parse_hex4(p, &u))) STRING_ERROR(LEPT_PARSE_INVALID_UNICODE_HEX);
+                        if (u <= 0xdbff && u >= 0xd800) {
+                            unsigned v=0;
+                            if (*p++ != '\\') STRING_ERROR(LEPT_PARSE_INVALID_UNICODE_SURROGATE);
+                            if (*p++ != 'u') STRING_ERROR(LEPT_PARSE_INVALID_UNICODE_SURROGATE);
+                            if (!(p = lept_parse_hex4(p, &v))) STRING_ERROR(LEPT_PARSE_INVALID_UNICODE_HEX);
+                            if (v > 0xdfff || v < 0xdc00) STRING_ERROR(LEPT_PARSE_INVALID_UNICODE_SURROGATE);
+                            u = 0x10000 + (u - 0xD800) * 0x400 + (v - 0xDC00);
+                        }
                         lept_encode_utf8(c, u);
                         break;
                     default:
@@ -216,7 +262,8 @@ const char* lept_get_string(const lept_value* v) {
 }
 
 size_t lept_get_string_length(const lept_value* v) {
-    assert(v != NULL && v->type == LEPT_STRING);
+    assert(v != NULL);
+    assert(v->type == LEPT_STRING);
     return v->u.s.len;
 }
 
